@@ -36,6 +36,8 @@ router.get('/search', async (req, res) => {
         });
     }
 
+    const limit = parseInt(req.query.limit) || 20;
+
     // 2. Check Cache
     if (cache.has(query)) {
         const cachedItem = cache.get(query);
@@ -44,7 +46,7 @@ router.get('/search', async (req, res) => {
             return res.json({
                 success: true,
                 source: 'cache',
-                data: cachedItem.data
+                data: cachedItem.data.slice(0, limit)
             });
         } else {
             cache.delete(query); // Expired
@@ -58,7 +60,7 @@ router.get('/search', async (req, res) => {
         const results = await ytmusic.searchSongs(query);
         
         // 4. Transform & Clean Data
-        const transformedData = results.slice(0, 20).map(song => {
+        const transformedData = results.map(song => {
             // Find highest resolution thumbnail
             const highestResThumb = song.thumbnails && song.thumbnails.length > 0 
                 ? song.thumbnails.sort((a, b) => b.width - a.width)[0].url 
@@ -83,7 +85,7 @@ router.get('/search', async (req, res) => {
         res.json({
             success: true,
             source: 'api',
-            data: transformedData
+            data: transformedData.slice(0, limit)
         });
 
     } catch (error) {

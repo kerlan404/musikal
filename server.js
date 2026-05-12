@@ -35,6 +35,8 @@ app.get('/api/health', (req, res) => res.json({ status: 'OK', version: 'NEW_SERV
 app.use('/api', searchRouter);
 app.use('/api', playlistRouter);
 app.use('/api', streamRouter);
+app.use('/api', require('./routes/home'));
+app.use('/api', require('./routes/library'));
 
 // 5. STATIC FILES
 app.use(express.static(__dirname));

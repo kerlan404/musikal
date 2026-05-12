@@ -1,413 +1,331 @@
+/**
+ * MusicFlow Premium Player Engine
+ * Responsibilities: Audio state, Controls, Progress, Volume, Queue
+ */
+
 class MusicPlayer {
     constructor() {
         this.audio = new Audio();
         this.queue = [];
+        this.originalQueue = [];
         this.currentIndex = -1;
         this.currentSong = null;
-        this.isPlaying = false;
-        this.isLooping = false;
-        this.isLoopingQueue = true;
-        this.isShuffling = false;
-        this.originalQueue = [];
-        this.appTitle = document.title;
         
-        // Preload state
-        this.preloadedUrl = null;
-        this.preloadedVideoId = null;
-
-        // DOM Elements
+        // State
+        this.isPlaying = false;
+        this.repeatMode = localStorage.getItem('mf_repeat') || 'OFF'; // OFF, ALL, ONE
+        this.isShuffled = localStorage.getItem('mf_shuffle') === 'true';
+        this.volume = parseFloat(localStorage.getItem('mf_volume')) || 0.75;
+        
+        // DOM
         this.elements = {
-            playerBar: document.querySelector('footer'),
-            thumbnail: document.getElementById('player-thumbnail'),
-            title: document.getElementById('player-title'),
-            artist: document.getElementById('player-artist'),
             btnPlay: document.getElementById('btn-play'),
             btnPrev: document.getElementById('btn-prev'),
             btnNext: document.getElementById('btn-next'),
             btnShuffle: document.getElementById('btn-shuffle'),
             btnRepeat: document.getElementById('btn-repeat'),
-            btnForward: document.getElementById('btn-forward'),
-            btnBackward: document.getElementById('btn-backward'),
-            currentTime: document.getElementById('time-current'),
-            durationTime: document.getElementById('time-total'),
-            progressBar: document.getElementById('player-audio'),
-            progressKnob: document.getElementById('progress-knob'),
-            progressContainer: document.getElementById('progress-container'),
-            volumeBar: document.getElementById('volume-slider'),
-            volumeContainer: document.getElementById('volume-container')
+            btnLike: document.getElementById('btn-player-like'),
+            thumbnail: document.getElementById('player-thumbnail'),
+            title: document.getElementById('player-title'),
+            artist: document.getElementById('player-artist'),
+            timeCurrent: document.getElementById('time-current'),
+            timeTotal: document.getElementById('time-total'),
+            progressFill: document.getElementById('player-progress-fill'),
+            progressContainer: document.getElementById('player-progress-container'),
+            volumeFill: document.getElementById('volume-fill'),
+            volumePercentage: document.getElementById('volume-percentage'),
+            volumeContainer: document.getElementById('volume-slider-container'),
+            volumeIcon: document.getElementById('volume-icon')
         };
 
-        this.initEventListeners();
+        this.init();
     }
 
-    initEventListeners() {
-        // Audio events
-        this.audio.ontimeupdate = () => {
-            this.updateProgressBar();
-            
-            // Trigger preload if remaining time < 45s
-            if (this.audio.duration && (this.audio.duration - this.audio.currentTime < 45)) {
-                this.preloadNext();
+    init() {
+        this.audio.volume = this.volume;
+        this.bindEvents();
+        this.updateVolumeUI();
+        this.updateRepeatUI();
+        this.updateShuffleUI();
+    }
+
+    parseTimeToSeconds(val) {
+        if (!val) return 0;
+        if (typeof val === 'number') return val;
+        if (typeof val !== 'string') return 0;
+        // Handle "MM:SS" or "HH:MM:SS"
+        const parts = val.split(':').map(Number);
+        if (parts.length === 2) return parts[0] * 60 + parts[1];
+        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+        return parseFloat(val) || 0;
+    }
+
+    bindEvents() {
+        // Audio Listeners
+        // FORCED INTERVAL SYNC (The most reliable way)
+        setInterval(() => {
+            if (!this.audio.paused && this.audio.src) {
+                const current = this.audio.currentTime;
+                const duration = this.audio.duration;
+                
+                // Sync Current Time
+                this.elements.timeCurrent.textContent = this.formatTime(current);
+
+                // Sync Total Duration with Fallback
+                let totalSecs = duration;
+                
+                // If audio duration is invalid, try to get it from the song object
+                if ((!totalSecs || !isFinite(totalSecs)) && this.currentSong) {
+                    totalSecs = this.parseTimeToSeconds(this.currentSong.duration_seconds || this.currentSong.duration);
+                }
+
+                if (totalSecs && isFinite(totalSecs) && totalSecs > 0) {
+                    const percent = (current / totalSecs) * 100;
+                    this.elements.progressFill.style.width = `${percent}%`;
+                    this.elements.timeTotal.textContent = this.formatTime(totalSecs);
+                } else if (this.audio.readyState > 0) {
+                    this.elements.timeTotal.textContent = '...';
+                }
             }
-        };
-        
-        this.audio.oncanplay = () => {
-            this.hideLoadingState();
-            this.updateUI();
-            this.elements.progressBar.classList.remove('animate-pulse-slow');
-        };
+        }, 500);
 
         this.audio.onplay = () => {
             this.isPlaying = true;
-            this.updateUI();
-            this.hideLoadingState();
+            this.updatePlayPauseUI();
         };
 
         this.audio.onpause = () => {
             this.isPlaying = false;
-            this.updateUI();
-        };
-
-        this.audio.onwaiting = () => {
-            this.showLoadingState();
-            this.elements.progressBar.classList.add('animate-pulse-slow');
-        };
-
-        this.audio.onplaying = () => {
-            this.hideLoadingState();
-            this.elements.progressBar.classList.remove('animate-pulse-slow');
+            this.updatePlayPauseUI();
         };
 
         this.audio.onended = () => {
-            if (!this.isLooping) this.next();
+            this.handleAutoNext();
         };
 
-        this.audio.onerror = () => {
-            // Error handled in loadAudio catch block usually, 
-            // but this is for errors during playback
-            console.error("[PLAYER] Audio error during playback");
-        };
+        // Control Buttons (Optional Bindings to prevent crashes)
+        if (this.elements.btnPlay) this.elements.btnPlay.onclick = () => this.togglePlay();
+        if (this.elements.btnNext) this.elements.btnNext.onclick = () => this.next();
+        if (this.elements.btnPrev) this.elements.btnPrev.onclick = () => this.prev();
+        if (this.elements.btnShuffle) this.elements.btnShuffle.onclick = () => this.toggleShuffle();
+        if (this.elements.btnRepeat) this.elements.btnRepeat.onclick = () => this.toggleRepeat();
+        if (this.elements.btnLike) this.elements.btnLike.onclick = () => this.toggleLike();
 
-        // UI Control events
-        this.elements.btnPlay.onclick = () => this.isPlaying ? this.pause() : this.play();
-        this.elements.btnNext.onclick = () => this.next();
-        this.elements.btnPrev.onclick = () => this.prev();
-        this.elements.btnShuffle.onclick = () => this.toggleShuffle();
-        this.elements.btnRepeat.onclick = () => this.toggleLoop();
-        this.elements.btnForward.onclick = () => this.seekForward();
-        this.elements.btnBackward.onclick = () => this.seekBackward();
+        // Seek Control
+        if (this.elements.progressContainer) {
+            this.elements.progressContainer.onclick = (e) => {
+                const rect = this.elements.progressContainer.getBoundingClientRect();
+                const pos = (e.clientX - rect.left) / rect.width;
+                if (this.audio.duration) {
+                    this.audio.currentTime = pos * this.audio.duration;
+                }
+            };
+        }
 
-        this.elements.progressContainer.onclick = (e) => {
-            const rect = this.elements.progressContainer.getBoundingClientRect();
-            const pos = (e.clientX - rect.left) / rect.width;
-            if (this.audio.duration) this.audio.currentTime = pos * this.audio.duration;
-        };
-
+        // Volume Control
         this.elements.volumeContainer.onclick = (e) => {
             const rect = this.elements.volumeContainer.getBoundingClientRect();
-            const pos = (e.clientX - rect.left) / rect.width;
-            this.setVolume(pos * 100);
+            const val = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            this.setVolume(val);
         };
     }
 
     /**
-     * REWRITE: loadAudio(videoId)
-     * Dual-mode strategy for high reliability
+     * Helper: Format Seconds to M:SS
      */
-    async loadAudio(videoId) {
-        // RESET audio element
-        this.audio.pause();
-        this.audio.removeAttribute('src');
-        this.audio.load();
-
-        // CEK PRELOAD: Jika sudah ada URL preloaded untuk videoId ini
-        if (this.preloadedVideoId === videoId && this.preloadedUrl) {
-            console.log('[PLAYER] Using preloaded URL ✓');
-            this.audio.src = this.preloadedUrl;
-            this.audio.type = 'audio/mp4';
-            this.preloadedUrl = null;
-            this.preloadedVideoId = null;
-            return 'preload';
-        }
-
-        // STRATEGI 1: Coba /api/audio-url (direct CDN URL)
-        try {
-            console.log('[PLAYER] Attempting Mode: Direct CDN URL...');
-            const res = await fetch(`/api/audio-url/${videoId}`);
-            if (!res.ok) throw new Error('audio-url endpoint gagal');
-            const data = await res.json();
-            
-            this.audio.src = data.url;
-            this.audio.type = 'audio/mp4';
-            
-            // Test apakah browser bisa load
-            await new Promise((resolve, reject) => {
-                const onCanPlay = () => {
-                    cleanup();
-                    resolve();
-                };
-                const onError = () => {
-                    cleanup();
-                    reject(new Error('Browser cannot play this stream'));
-                };
-                const timeout = setTimeout(() => {
-                    cleanup();
-                    reject(new Error('Timeout loading direct URL'));
-                }, 8000);
-
-                const cleanup = () => {
-                    this.audio.removeEventListener('canplay', onCanPlay);
-                    this.audio.removeEventListener('error', onError);
-                    clearTimeout(timeout);
-                };
-
-                this.audio.addEventListener('canplay', onCanPlay);
-                this.audio.addEventListener('error', onError);
-                this.audio.load();
-            });
-            
-            console.log('[PLAYER] Mode: Direct CDN URL ✓');
-            return 'direct';
-            
-        } catch (err) {
-            console.warn('[PLAYER] Direct URL gagal, coba stream pipe...', err.message);
-        }
-        
-        // STRATEGI 2: Fallback ke /api/stream (pipe yt-dlp + ffmpeg)
-        try {
-            console.log('[PLAYER] Attempting Mode: Stream Pipe...');
-            this.audio.src = `/api/stream/${videoId}`;
-            this.audio.type = 'audio/mpeg';
-            
-            await new Promise((resolve, reject) => {
-                const onCanPlay = () => {
-                    cleanup();
-                    resolve();
-                };
-                const onError = () => {
-                    cleanup();
-                    reject(new Error('Browser cannot play transcoded stream'));
-                };
-                const timeout = setTimeout(() => {
-                    cleanup();
-                    reject(new Error('Timeout loading transcoded stream'));
-                }, 15000);
-
-                const cleanup = () => {
-                    this.audio.removeEventListener('canplay', onCanPlay);
-                    this.audio.removeEventListener('error', onError);
-                    clearTimeout(timeout);
-                };
-
-                this.audio.addEventListener('canplay', onCanPlay);
-                this.audio.addEventListener('error', onError);
-                this.audio.load();
-            });
-            
-            console.log('[PLAYER] Mode: Stream Pipe ✓');
-            return 'stream';
-            
-        } catch (err) {
-            console.error('[PLAYER] Semua metode gagal:', err.message);
-            throw new Error('Audio tidak dapat dimuat');
-        }
+    formatTime(seconds) {
+        if (isNaN(seconds) || !isFinite(seconds) || seconds < 0) return '0:00';
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${s.toString().padStart(2, '0')}`;
     }
 
-    /**
-     * UPDATE: playSongFromSearch(song)
-     * Optimistic loading + reliable playback
-     */
-    async playSongFromSearch(song) {
-        if (!song || !song.videoId) return;
+    async playSong(song, newQueue = null) {
+        if (!song) return;
 
-        // Update UI bottom player dulu (optimistic UI)
-        this.updatePlayerUI(song);
-        this.showLoadingState();
-        this.elements.progressBar.classList.add('animate-pulse-slow');
+        if (newQueue) {
+            this.originalQueue = [...newQueue];
+            this.queue = this.isShuffled ? this.shuffle([...newQueue]) : [...newQueue];
+        }
+
+        this.currentSong = song;
+        this.currentIndex = this.queue.findIndex(s => (s.videoId || s.id) === (song.videoId || song.id));
+
+        this.updateUI();
         
-        // Show player bar if hidden
-        this.elements.playerBar.classList.add('active');
-        this.elements.playerBar.classList.remove('hidden');
-
+        // Load and Play
         try {
-            this.currentSong = song;
-            this.highlightActiveCard(song.videoId);
-            document.title = `${song.title} — ${song.artist} ♪`;
-
-            await this.loadAudio(song.videoId);
+            const trackId = song.videoId || song.id;
+            this.audio.src = `/api/stream/${trackId}`;
             await this.audio.play();
             
-            this.isPlaying = true;
-            this.updateUI();
-            this.hideLoadingState();
-            
-            // Set timeout for preloading next song (30s after start)
-            setTimeout(() => this.preloadNext(), 30000);
+            // Record History
+            fetch('/api/history', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ song_id: song.id, video_id: trackId })
+            }).catch(e => {});
+
+            // Sync Like State
+            this.syncLikeUI(trackId);
 
         } catch (err) {
-            this.hideLoadingState();
-            this.showToast('Lagu ini tidak dapat diputar. Mencoba lagu berikutnya...', 'error');
-            console.error('[PLAYER] Error:', err);
-            setTimeout(() => this.next(), 2000);
+            console.error('Playback failed:', err);
+            if (window.showToast) window.showToast('Playback failed', 'error');
         }
     }
 
-    preloadNext() {
-        if (this.queue.length === 0) return;
-        const nextIndex = (this.currentIndex + 1) % this.queue.length;
-        const nextSong = this.queue[nextIndex];
-        if (!nextSong || this.preloadedVideoId === nextSong.videoId) return;
-        
-        console.log('[PLAYER] Preloading next:', nextSong.title);
-        // Fetch URL di background (jangan play)
-        fetch(`/api/audio-url/${nextSong.videoId}`)
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    this.preloadedUrl = data.url;
-                    this.preloadedVideoId = nextSong.videoId;
-                    console.log('[PLAYER] Preloaded ready for:', nextSong.title);
-                }
-            })
-            .catch(() => {}); // silent fail
-    }
+    updateUI() {
+        const song = this.currentSong;
+        if (!song) return;
 
-    updatePlayerUI(song) {
-        this.elements.thumbnail.src = song.thumbnail || 'https://via.placeholder.com/160?text=No+Cover';
         this.elements.title.textContent = song.title;
         this.elements.artist.textContent = song.artist;
-    }
-
-    showLoadingState() {
-        if (this.elements.btnPlay) {
-            this.elements.btnPlay.innerHTML = '<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>';
-            if (typeof lucide !== 'undefined') lucide.createIcons();
+        
+        const thumb = this.elements.thumbnail;
+        const defaultIcon = document.getElementById('player-default-icon');
+        
+        if (song.thumbnail) {
+            thumb.src = song.thumbnail;
+            thumb.classList.remove('hidden');
+            if (defaultIcon) defaultIcon.classList.add('hidden');
+        } else {
+            thumb.classList.add('hidden');
+            if (defaultIcon) defaultIcon.classList.remove('hidden');
         }
+        this.updatePlayPauseUI();
     }
 
-    hideLoadingState() {
-        if (this.elements.btnPlay) {
-            const iconName = this.isPlaying ? 'pause' : 'play';
-            this.elements.btnPlay.innerHTML = `<i data-lucide="${iconName}" class="w-5 h-5 fill-current"></i>`;
-            if (typeof lucide !== 'undefined') lucide.createIcons();
-        }
-    }
-
-    showToast(msg, type = 'success') {
-        const toast = document.createElement('div');
-        toast.className = `fixed bottom-24 right-4 px-6 py-3 rounded-lg shadow-2xl z-[9999] transition-all duration-500 translate-y-20 opacity-0 bg-[#282828] text-white text-sm border-l-4 font-medium`;
-        
-        const colors = {
-            success: '#1DB954',
-            error: '#E53935',
-            warning: '#FFD600'
-        };
-        
-        toast.style.borderLeftColor = colors[type] || colors.success;
-        toast.innerHTML = msg;
-        
-        document.body.appendChild(toast);
-        
-        // Animate in
-        setTimeout(() => {
-            toast.classList.remove('translate-y-20', 'opacity-0');
-            toast.classList.add('translate-y-0', 'opacity-100');
-        }, 10);
-        
-        // Remove after 3s
-        setTimeout(() => {
-            toast.classList.add('opacity-0', 'translate-y-2');
-            setTimeout(() => toast.remove(), 500);
-        }, 3000);
-    }
-
-    highlightActiveCard(videoId) {
-        document.querySelectorAll('.song-item, .song-card').forEach(card => {
-            card.classList.remove('playing');
-            if (card.dataset.videoId === videoId) {
-                card.classList.add('playing');
-            }
-        });
-    }
-
-    play() {
+    togglePlay() {
         if (!this.audio.src) return;
-        this.audio.play().then(() => {
-            this.isPlaying = true;
-            this.updateUI();
-        }).catch(err => console.warn("Playback failed:", err));
-    }
-
-    pause() {
-        this.audio.pause();
-        this.isPlaying = false;
-        this.updateUI();
+        this.isPlaying ? this.audio.pause() : this.audio.play();
     }
 
     next() {
         if (this.queue.length === 0) return;
-        this.currentIndex = (this.currentIndex + 1) % this.queue.length;
-        this.playSong(this.currentIndex);
+        let nextIdx = this.currentIndex + 1;
+        if (nextIdx >= this.queue.length) {
+            if (this.repeatMode === 'ALL') nextIdx = 0;
+            else return;
+        }
+        this.playSong(this.queue[nextIdx]);
     }
 
     prev() {
         if (this.audio.currentTime > 3) {
             this.audio.currentTime = 0;
+            return;
+        }
+        if (this.queue.length === 0) return;
+        let prevIdx = this.currentIndex - 1;
+        if (prevIdx < 0) {
+            if (this.repeatMode === 'ALL') prevIdx = this.queue.length - 1;
+            else prevIdx = 0;
+        }
+        this.playSong(this.queue[prevIdx]);
+    }
+
+    handleAutoNext() {
+        if (this.repeatMode === 'ONE') {
+            this.audio.currentTime = 0;
+            this.audio.play();
         } else {
-            this.currentIndex = (this.currentIndex - 1 + this.queue.length) % this.queue.length;
-            this.playSong(this.currentIndex);
+            this.next();
         }
     }
 
-    playSong(index) {
-        if (index < 0 || index >= this.queue.length) return;
-        this.currentIndex = index;
-        const song = this.queue[index];
-        this.playSongFromSearch(song);
-    }
-
-    seekForward() { this.audio.currentTime = Math.min(this.audio.duration, this.audio.currentTime + 10); }
-    seekBackward() { this.audio.currentTime = Math.max(0, this.audio.currentTime - 10); }
-
-    toggleLoop() {
-        this.isLooping = !this.isLooping;
-        this.audio.loop = this.isLooping;
-        this.elements.btnRepeat.classList.toggle('text-spotify-green', this.isLooping);
+    toggleRepeat() {
+        const modes = ['OFF', 'ALL', 'ONE'];
+        const currentIdx = modes.indexOf(this.repeatMode);
+        this.repeatMode = modes[(currentIdx + 1) % modes.length];
+        localStorage.setItem('mf_repeat', this.repeatMode);
+        this.updateRepeatUI();
     }
 
     toggleShuffle() {
-        this.isShuffling = !this.isShuffling;
-        this.elements.btnShuffle.classList.toggle('text-spotify-green', this.isShuffling);
+        this.isShuffled = !this.isShuffled;
+        localStorage.setItem('mf_shuffle', this.isShuffled);
+        
+        if (this.isShuffled) {
+            const currentSongId = this.currentSong?.videoId;
+            this.queue = this.shuffle([...this.originalQueue]);
+            this.currentIndex = this.queue.findIndex(s => s.videoId === currentSongId);
+        } else {
+            const currentSongId = this.currentSong?.videoId;
+            this.queue = [...this.originalQueue];
+            this.currentIndex = this.queue.findIndex(s => s.videoId === currentSongId);
+        }
+        this.updateShuffleUI();
     }
 
     setVolume(val) {
-        this.audio.volume = Math.max(0, Math.min(100, val)) / 100;
-        this.elements.volumeBar.style.width = `${val}%`;
+        this.volume = val;
+        this.audio.volume = val;
+        localStorage.setItem('mf_volume', val);
+        this.updateVolumeUI();
     }
 
-    updateProgressBar() {
-        const { currentTime, duration } = this.audio;
-        if (!duration) return;
-        const percent = (currentTime / duration) * 100;
-        this.elements.progressBar.style.width = `${percent}%`;
-        this.elements.progressKnob.style.left = `${percent}%`;
-        this.elements.currentTime.textContent = this.formatTime(currentTime);
-        this.elements.durationTime.textContent = this.formatTime(duration);
+    // --- UI HELPERS ---
+
+    updatePlayPauseUI() {
+        if (!this.elements.btnPlay) return;
+        const icon = this.isPlaying ? 'pause' : 'play';
+        this.elements.btnPlay.innerHTML = `<i data-lucide="${icon}" class="w-6 h-6 fill-current"></i>`;
+        lucide.createIcons();
     }
 
-    updateUI() {
-        if (this.elements.btnPlay) {
-            const iconName = this.isPlaying ? 'pause' : 'play';
-            this.elements.btnPlay.innerHTML = `<i data-lucide="${iconName}" class="w-5 h-5 fill-current"></i>`;
-            if (typeof lucide !== 'undefined') lucide.createIcons();
+    updateRepeatUI() {
+        if (!this.elements.btnRepeat) return;
+        const btn = this.elements.btnRepeat;
+        btn.classList.toggle('text-accent-green', this.repeatMode !== 'OFF');
+        if (this.repeatMode === 'ONE') {
+            btn.innerHTML = '<div class="relative"><i data-lucide="repeat-1" class="w-4 h-4"></i></div>';
+        } else {
+            btn.innerHTML = '<i data-lucide="repeat" class="w-4 h-4"></i>';
+        }
+        lucide.createIcons();
+    }
+
+    updateShuffleUI() {
+        this.elements.btnShuffle.classList.toggle('text-accent-green', this.isShuffled);
+    }
+
+    updateVolumeUI() {
+        const percent = Math.round(this.volume * 100);
+        if (this.elements.volumeFill) this.elements.volumeFill.style.width = `${percent}%`;
+        if (this.elements.volumePercentage) this.elements.volumePercentage.textContent = `${percent}%`;
+        
+        let icon = 'volume-2';
+        if (percent === 0) icon = 'volume-x';
+        else if (percent < 50) icon = 'volume-1';
+        if (this.elements.volumeIcon) {
+            this.elements.volumeIcon.setAttribute('data-lucide', icon);
+            lucide.createIcons();
         }
     }
 
-    formatTime(seconds) {
-        if (isNaN(seconds) || !isFinite(seconds)) return "0:00";
-        const min = Math.floor(seconds / 60);
-        const sec = Math.floor(seconds % 60);
-        return `${min}:${sec < 10 ? '0' : ''}${sec}`;
+    toggleLike() {
+        if (this.currentSong && window.toggleLike) {
+            window.toggleLike(this.currentSong);
+        }
+    }
+
+    async syncLikeUI(videoId) {
+        try {
+            const res = await fetch('/api/library');
+            const json = await res.json();
+            const isLiked = json.data.liked.some(s => s.videoId === videoId);
+            this.elements.btnLike.classList.toggle('text-red-500', isLiked);
+            this.elements.btnLike.classList.toggle('fill-current', isLiked);
+        } catch (e) {}
+    }
+
+    shuffle(array) {
+        for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
+        }
+        return array;
     }
 }
 

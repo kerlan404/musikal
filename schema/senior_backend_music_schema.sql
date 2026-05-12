@@ -66,6 +66,37 @@ CREATE TABLE `playlist_songs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Table structure for liked_songs
+-- ----------------------------
+DROP TABLE IF EXISTS `liked_songs`;
+CREATE TABLE `liked_songs` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `song_id` int(11) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_user_song_liked` (`user_id`,`song_id`),
+  CONSTRAINT `fk_liked_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_liked_song` FOREIGN KEY (`song_id`) REFERENCES `songs` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Table structure for song_history
+-- ----------------------------
+DROP TABLE IF EXISTS `song_history`;
+CREATE TABLE `song_history` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `song_id` int(11) NOT NULL,
+  `played_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `play_count` int(11) DEFAULT '1',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_user_song_history` (`user_id`,`song_id`),
+  CONSTRAINT `fk_history_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_history_song` FOREIGN KEY (`song_id`) REFERENCES `songs` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
 -- Dummy Data for users
 -- ----------------------------
 INSERT INTO `users` (`username`, `password`) VALUES 
@@ -96,5 +127,11 @@ INSERT INTO `playlist_songs` (`playlist_id`, `song_id`, `urutan`) VALUES
 (1, 1, 1),
 (1, 2, 2),
 (2, 2, 1);
+
+-- ----------------------------
+-- Dummy Data for liked_songs & history
+-- ----------------------------
+INSERT INTO `liked_songs` (`user_id`, `song_id`) VALUES (1, 1), (1, 3);
+INSERT INTO `song_history` (`user_id`, `song_id`, `play_count`) VALUES (1, 1, 10), (1, 2, 5), (1, 3, 2);
 
 SET FOREIGN_KEY_CHECKS = 1;
